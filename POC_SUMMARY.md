@@ -1,51 +1,24 @@
-# 🍁 Canadian Tire Retail AI Agent — Executive POC Summary
+# Canadian Tire Retail AI Copilot: POC Summary
 
-## 📌 Framing: Proof of Concept (POC)
-This project is an **Executive Proof of Concept (POC)** demonstrating how conversational agentic AI combined with deterministic, in-memory analytical databases (**DuckDB**) can revolutionize decision-making across Canadian Tire's retail network.
+## The problem
+LLMs are good with language and bad with arithmetic over thousands of rows. Ask a chat model "which brands lost margin rate in 2024?" and it may make up the numbers.
 
-Traditional LLM chat interfaces frequently hallucinate calculations or struggle with numerical aggregations. This POC establishes a **zero-hallucination benchmark**: every KPI, margin rate, and growth percentage is computed by an in-memory SQL engine with sub-20ms latency.
+## The approach
+The model never calculates. It writes SQL (or calls a fixed tool), DuckDB runs it in memory in a few milliseconds, and the model explains the result in plain English. Every answer shows the queries behind it.
 
----
+## What the POC does today
+- **Plain-English questions** about sales, cost, margin, units, brands, divisions, regions, stores and products.
+- **Business definitions built in.** Sales, COGS, margin and weighted margin rate are pre-computed, with year-over-year views for every level.
+- **A margin bridge tool** that splits the 2023 → 2024 margin change into price (+$22,341), cost (−$9,630), volume (+$9,078) and mix (+$2,678), adding up exactly to +$24,468.
+- **Honest about the data.** It warns that store-size and seasonality comparisons aren't reliable in this extract (one row per store per day).
+- **Checked accuracy.** 14 of 14 test questions answered correctly on two Groq models, plus offline tests that tie every core number to the validated case-study results and the Power BI dashboard.
+- **Safe by design.** Read-only database, no file or network access from SQL, a single SELECT per call, and API keys kept on the server.
 
-## ⚡ Current POC Capabilities
-1. **Deterministic Text-to-SQL Execution**:
-   - Converts conversational business questions into standardized ANSI SQL queries.
-   - Executes queries in-process against 21,931 retail transaction records via DuckDB without server overhead.
+## What a full version could do
+1. **Run on the warehouse.** Point the same agent at full POS, Triangle Rewards and inventory data.
+2. **Flag margin squeezes early.** Check supplier cost changes against retail prices every week and alert category managers. In this data, that would have caught Fynix (cost +10%, price +6%, margin rate −265 bps).
+3. **Answer what-if questions.** "If we raise Fynix prices 4%, what happens to margin?"
+4. **Meet people where they work** in Teams or Slack, with a morning summary for store and category leaders.
 
-2. **Autonomous Tool Calling & Self-Correction**:
-   - Uses function calling (`execute_sql`) to inspect real data.
-   - Automatically catches syntax or column errors and self-corrects up to 3 times before presenting the final answer.
-
-3. **Auditability & Executive Transparency**:
-   - Displays the exact SQL executed and the full result table in an expandable drawer alongside the executive summary.
-   - Provides instant 1-click CSV export of query results.
-
-4. **Zero-Frontend Credential Exposure**:
-   - API keys are handled entirely on the backend via environment variables or Streamlit Secrets—no user credentials are requested or displayed in the UI.
-
-5. **Pre-Built Diagnostic Query Shortcuts**:
-   - Includes instant diagnostic queries covering division margin growth, low-margin brand analysis, cost-price spread squeeze, and store size efficiency.
-
----
-
-## 🚀 The Multi-Million Dollar Future: Full Enterprise Vision
-When expanded from a standalone POC into a full enterprise deployment, this agent architecture will unlock transformative value for Canadian Tire:
-
-### 1. Enterprise Data Warehouse & Lakehouse Scale
-- **Direct Lakehouse Connectivity**: Connect DuckDB directly to Snowflake, Databricks, or MotherDuck to query billions of point-of-sale transactions and Triangle Rewards loyalty records.
-- **Real-Time POS Streams**: Enable store managers to query intraday foot traffic and shelf inventory.
-
-### 2. Proactive Merchandising & Margin Protection
-- **Automated Margin Squeeze Alarms**: Continuously audit vendor cost changes against retail selling prices, proactively flagging supplier margin compression to Category Managers before POs are cut.
-- **Dynamic Promotion Lift Optimization**: Measure true promotional elasticity vs baseline sales to prevent unprofitable discounting.
-
-### 3. Scenario Simulation & "What-If" Analysis
-- Instead of static dashboards, allow executives to simulate pricing moves: *"What happens to division gross margin if we shift promotional markdown from 15% to 10% in Ontario stores?"*
-
-### 4. Omnichannel Agent Integration
-- Embed the agent into **Microsoft Teams, Slack, and Mobile Zebra handheld devices**, delivering automated morning performance briefings directly to Store General Managers.
-
----
-
-### Summary Takeaway
-> **This POC is the blueprint:** It proves that AI can be 100% mathematically deterministic, lightning fast, and accessible to non-technical leaders. Taking this to full production transforms Canadian Tire's merchandising from **reactive reporting** to **proactive, agentic decision intelligence**.
+## Takeaway
+The POC shows that a leader can get a correct, checkable answer to a margin question in seconds without opening a dashboard. The next step is real enterprise data.
