@@ -7,6 +7,7 @@ lives in agent_core.py.
 """
 
 import hashlib
+import importlib
 import os
 from typing import Any, Dict, List, Optional
 
@@ -14,6 +15,14 @@ import streamlit as st
 from dotenv import load_dotenv
 
 import agent_core as core
+
+# Streamlit re-runs app.py on every interaction, but Python keeps imported modules in
+# memory. After a redeploy that leaves an OLD agent_core loaded next to a NEW app.py
+# (e.g. "module 'agent_core' has no attribute ..."). Reload it whenever the file changes.
+CORE_VERSION = str(os.path.getmtime(core.__file__))
+if getattr(core, "_loaded_version", None) not in (None, CORE_VERSION):
+    core = importlib.reload(core)
+core._loaded_version = CORE_VERSION
 
 load_dotenv()
 
@@ -50,17 +59,17 @@ PROVIDERS = {
 # Data + database
 # ------------------------------------------------------------------------------
 @st.cache_resource(show_spinner="Loading data into DuckDB...")
-def get_database(file_bytes: bytes, file_name: str):
-    """One locked-down database per dataset, shared read-only across sessions."""
+def get_database(file_bytes: bytes, file_name: str, core_version: str):
+    """One locked-down database per dataset (and per agent_core version), shared read-only across sessions."""
     df = core.load_dataframe(file_bytes, file_name)
     return core.build_database(df)
 
 
 def get_session_cursor(file_bytes: bytes, file_name: str):
     """Each browser session gets its own cursor (DuckDB connections aren't shared across threads)."""
-    data_key = hashlib.sha1(file_bytes).hexdigest()
+    data_key = hashlib.sha1(file_bytes).hexdigest() + ":" + CORE_VERSION
     if st.session_state.get("data_key") != data_key:
-        con = get_database(file_bytes, file_name)
+        con = get_database(file_bytes, file_name, CORE_VERSION)
         st.session_state.cursor = con.cursor()
         st.session_state.data_key = data_key
         st.session_state.profile = core.profile_dataset(st.session_state.cursor)
