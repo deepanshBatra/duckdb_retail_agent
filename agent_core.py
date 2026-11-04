@@ -298,15 +298,21 @@ def margin_bridge(cur: duckdb.DuckDBPyConnection, level: str = "company") -> Dic
     p["mix_effect"] = (p.units_2024 - p.units_2023) * m23 - p["volume_effect"]
 
     cols = ["margin_2023", "price_effect", "cost_effect", "volume_effect", "mix_effect", "margin_2024"]
+    sums = cols + ["sales_2023", "sales_2024"]
     if col:
-        out = p.groupby(col)[cols].sum().reset_index()
-        total = out[cols].sum().to_frame().T
+        out = p.groupby(col)[sums].sum().reset_index()
+        total = out[sums].sum().to_frame().T
         total.insert(0, col, "TOTAL")
         out = pd.concat([out, total], ignore_index=True)
     else:
-        out = p[cols].sum().to_frame().T
+        out = p[sums].sum().to_frame().T
         out.insert(0, "level", "Company")
     out["margin_change"] = out.margin_2024 - out.margin_2023
+    # Each row's own margin rate, so a group's rate change is never confused with the company's.
+    out["margin_rate_2023"] = out.margin_2023 / out.sales_2023 * 100
+    out["margin_rate_2024"] = out.margin_2024 / out.sales_2024 * 100
+    out["rate_change_bps"] = (out.margin_rate_2024 - out.margin_rate_2023) * 100
+    out = out.drop(columns=["sales_2023", "sales_2024"])
     out["check_difference"] = (out.price_effect + out.cost_effect + out.volume_effect + out.mix_effect - out.margin_change).round(6)
 
     # Margin-rate split: how much of the rate change is mix vs price/cost.
@@ -401,14 +407,47 @@ Prefer these views over writing long CASE WHEN queries.
 ## Things to know about this data
 {facts_txt}
 
+## Reading the numbers correctly
+- "% change" (e.g. margin +12.03%) is NOT "percentage points". Percentage points / bps are only for changes in a RATE.
+- Bridge signs: a NEGATIVE cost effect means unit costs ROSE (it hurt margin); a positive one means costs fell.
+  Negative volume = fewer units; negative mix = sales shifted toward lower-margin products.
+- Only quote numbers for the level asked about. Never present a company total (e.g. the company's +45 bps) as a
+  division's, brand's or store's figure; query that group's own value.
+- "Margin" means gross margin dollars; "margin rate" means margin / sales.
+
 ## How to answer
 1. Run the query or tool first. If it errors, read the error and fix the query.
-2. Start with a direct answer in 1-3 short sentences, in plain English.
-3. Then a small markdown table with the key numbers, if it helps.
-4. If the question is about store size / format productivity or monthly seasonality, put the data caveat in your FIRST
+2. If the question is about store size / format productivity or monthly seasonality, put the data caveat in your FIRST
    sentence and do not recommend opening, closing or resizing stores, or seasonal stock moves, from this data.
-5. Add one short line of caveat or suggested action only if it is useful. Do not invent causes (weather, promotions, etc.)
-   that are not in the data; say what the data shows and what it can't show.
+3. Do not invent causes (weather, promotions, etc.) that are not in the data; say what the data shows and what it can't.
+
+## Answer format (rendered as Markdown in a chat window)
+- EXCEPTION, store size / format / per-sq-ft or seasonality questions: your first sentence must be the caveat that
+  this data can't judge it (see the store-size example below), and only then the numbers.
+- Open with the answer itself in 1-2 plain sentences. No heading, no "Answer:" or "**Answer**" label, no preamble
+  like "Based on the data". Bold only the one or two key figures or names, never a whole sentence.
+- Then, if there are 3+ numbers to compare, ONE markdown table:
+  - a blank line before it; at most 6 columns and 10 rows (say "top 10 of N" if you cut rows);
+  - short headers with units, e.g. `Margin 2024 ($)`, `Change (%)`, `Rate change (bps)`;
+  - numbers formatted as $1,234.56 / 12.03% / +45 bps, with a sign on changes (+/-), no bold inside the table.
+- Optionally finish with ONE line in italics: a caveat or a suggested next step. Don't repeat the table in prose.
+- Keep it under about 150 words unless the user asks for detail. No emojis, no code blocks, no SQL (the app shows
+  the SQL separately), no LaTeX.
+- Use plain ASCII: normal spaces and the normal hyphen "-" (never non-breaking or narrow spaces/hyphens).
+
+Example of a good answer:
+West grew margin fastest in 2024, up **+12.03%** (+$11,671.92) to $108,719.61.
+
+| Region | Stores | Margin 2024 ($) | Change ($) | Change (%) |
+|:--|--:|--:|--:|--:|
+| West | 2 | $108,719.61 | +$11,671.92 | +12.03% |
+| South | 1 | $52,349.44 | +$4,974.47 | +10.50% |
+
+*West and South have fewer stores, so compare margin per store before reallocating budget.*
+
+Example for a store-size question (caveat first):
+Store size can't be judged from this data: every store has one row per day, so each earns about the same
+(**~$52K** of margin in 2024) whatever its size. Per square foot, Compact looks highest only because its stores are smaller.
 """
 
 
@@ -472,6 +511,42 @@ def clean_model_text(text: Optional[str]) -> str:
     return text.strip()
 
 
+_UNICODE_FIXES = {
+    " ": " ", " ": " ", " ": " ", " ": " ",   # narrow / non-breaking / thin spaces
+    "‑": "-", "‐": "-", "−": "-",                   # non-breaking hyphen, hyphen, minus sign
+}
+_CODE_SPLIT_RE = re.compile(r"(```.*?```|`[^`\n]*`)", re.DOTALL)
+_LABEL_RE = re.compile(r"^\s*(\*\*|#+\s*)?(answer|short answer|executive summary)\s*:?\s*(\*\*)?\s*:?\s*\n", re.IGNORECASE)
+
+
+def to_display_markdown(text: str) -> str:
+    """
+    Make model (or quick-answer) text safe for st.markdown:
+      * strip reasoning blocks and a leading "**Answer**" label
+      * normalise unusual spaces / hyphens
+      * escape $ so Streamlit doesn't render "$1 ... $2" as LaTeX math
+      * make sure tables start after a blank line so they render as tables
+    Code spans and blocks are left untouched.
+    """
+    text = clean_model_text(text)
+    for bad, good in _UNICODE_FIXES.items():
+        text = text.replace(bad, good)
+    text = re.sub(r"[–—](?=\s?[\$\d])", "-", text)  # en/em dash used as a minus sign
+    text = _LABEL_RE.sub("", text, count=1)
+
+    parts = _CODE_SPLIT_RE.split(text)
+    for i in range(0, len(parts), 2):  # even indexes are outside code
+        parts[i] = re.sub(r"(?<!\\)\$", r"\\$", parts[i])
+    text = "".join(parts)
+
+    lines, out = text.split("\n"), []
+    for ln in lines:
+        if ln.lstrip().startswith("|") and out and out[-1].strip() and not out[-1].lstrip().startswith("|"):
+            out.append("")
+        out.append(ln)
+    return "\n".join(out).strip()
+
+
 def execute_tool(cur: duckdb.DuckDBPyConnection, name: str, args: Dict[str, Any]) -> (Step, str):
     """Run one tool call. Returns the step (for display) and the JSON string for the model."""
     if name == "run_sql":
@@ -491,8 +566,12 @@ def execute_tool(cur: duckdb.DuckDBPyConnection, name: str, args: Dict[str, Any]
         except Exception as e:
             return Step("margin_bridge", args=args, error=str(e)), json.dumps({"status": "error", "error": str(e)})
         step = Step("margin_bridge", args={"level": level}, df=b["table"], ms=ms)
-        rate = {k: round(v, 2) for k, v in b["rate_split"].items()}
-        return step, json.dumps({"status": "ok", "note": b["note"], "rate_split": rate, **df_to_payload(b["table"])})
+        rate = {k: round(float(v), 2) for k, v in b["rate_split"].items()}
+        return step, json.dumps({"status": "ok", "note": b["note"],
+                                 "company_wide_rate_split": rate,
+                                 "rate_split_note": ("company_wide_rate_split is for the WHOLE company only. For a group's own "
+                                                     "rate change use rate_change_bps in that group's row."),
+                                 **df_to_payload(b["table"])})
     return Step(name, args=args, error="Unknown tool"), json.dumps({"status": "error", "error": f"Unknown tool {name}"})
 
 

@@ -158,6 +158,30 @@ def test_system_prompt_has_real_stores():
     assert "OBQH" in prompt and "731 days" in prompt and "ONE row per store per day" in prompt
 
 
+def test_display_markdown():
+    raw = ("**Answer**  \n"
+           "Sales were $1,063,778.23 and margin $530,429.02 (+4.84 %), cost ‑$9.6K.\n"
+           "| A | B |\n|--|--|\n| 1 | 2 |")
+    out = core.to_display_markdown(raw)
+    assert "Answer" not in out
+    assert r"\$1,063,778.23" in out and r"\$530,429.02" in out      # $ escaped, so no LaTeX
+    assert " " not in out and "‑" not in out and r"-\$9.6K" in out
+    assert "\n\n| A | B |" in out                                     # blank line before table
+    assert core.to_display_markdown("Use `SELECT $1` here") == "Use `SELECT $1` here"   # code untouched
+    assert core.to_display_markdown(r"already \$5") == r"already \$5"                   # no double escape
+
+
+def test_bridge_rates_are_per_group():
+    df = core.margin_bridge(CUR, "division")["table"].set_index("PRODUCT_DIVISION")
+    assert close(df.loc["Apparel", "rate_change_bps"], 111.8, 0.2)
+    assert close(df.loc["Tools", "rate_change_bps"], -189.9, 0.2)
+
+
+def test_prompt_has_format_rules():
+    prompt = core.build_system_prompt(core.profile_dataset(CUR))
+    assert "Answer format" in prompt and "NEGATIVE cost effect" in prompt and "percentage points" in prompt
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0

@@ -204,7 +204,7 @@ def main() -> None:
     # ---------------- Chat history ----------------
     for n, msg in enumerate(history):
         with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+            st.markdown(core.to_display_markdown(msg["content"]))
             if msg["role"] == "assistant":
                 if msg.get("source") == "instant":
                     st.caption("Instant answer from a fixed, tested query.")
@@ -221,7 +221,7 @@ def main() -> None:
 
     history.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
-        st.markdown(prompt)
+        st.markdown(core.to_display_markdown(prompt))
 
     with st.chat_message("assistant"):
         use_instant = clicked is not None and (not use_agent_for_quick or not api_key)
@@ -254,7 +254,7 @@ def main() -> None:
         text = result.text or "_The model returned an empty answer. Try rephrasing the question._"
         if result.hit_step_limit:
             text += "\n\n_Note: the agent hit its query limit, so this answer may be incomplete._"
-        st.markdown(text)
+        st.markdown(core.to_display_markdown(text))
         if source == "instant":
             st.caption("Instant answer from a fixed, tested query.")
         render_steps(result.steps, key_prefix=f"h{len(history)}", expanded=False)
