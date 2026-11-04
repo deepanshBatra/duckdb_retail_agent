@@ -1,141 +1,73 @@
 # 🍁 Canadian Tire Retail AI Copilot
 
-> **Executive Status:** Proof of Concept (POC)  
-> **Core Engine:** In-Memory DuckDB OLAP + Self-Correcting Tool-Calling LLM  
-> **Deployment Target:** Streamlit Community Cloud / Enterprise Docker  
+A proof of concept that lets leaders ask sales and margin questions in plain English. A tool-calling LLM answers by writing SQL against an in-memory **DuckDB** database, so every number comes from a query you can open and check.
+
+**Status:** proof of concept, built on the case-study extract (7,310 rows, 10 stores, 1 Jan 2023 – 31 Dec 2024).
 
 ---
 
-## 📌 Executive Summary: Proof of Concept (POC)
+## What it does
 
-This application is an **Executive Proof of Concept (POC)** built to solve the fundamental flaw of traditional conversational AI in retail analytics: **mathematical hallucination**.
+- **Answers questions with real queries.** The model never does the math itself. It calls tools, and every answer shows each SQL query, its result table, how long it took, and a CSV download.
+- **Knows the business definitions.** Sales, COGS, margin and margin rate are pre-computed per row, and helper views give year-over-year results by division, category, brand, region, store, store format and product. Margin rates are always weighted (`SUM(margin) / SUM(sales)`), never averaged.
+- **Explains *why* margin moved.** A `margin_bridge` tool splits the 2023 → 2024 margin change into price, cost, volume and mix effects that add up exactly. It also splits the margin-rate change into mix vs. price-vs-cost.
+- **Knows the limits of the data.** The prompt tells the model that the extract has one row per store per day, so store-size and seasonality comparisons aren't reliable, and it says so instead of making recommendations from them.
+- **Gives instant answers to four quick questions** without an API key. These use fixed, tested queries, and the text is built from the live results.
+- **Is locked down.** The database is read-only, file and network access are switched off inside DuckDB, and only a single `SELECT` is accepted per call. API keys are read on the server only.
 
-Traditional vector RAG systems fail when asked questions like *"Which brands had margin rate compression in 2024?"* because language models cannot reliably calculate aggregations across thousands of rows. 
+## Accuracy
 
-The **Canadian Tire Retail AI Copilot** pairs a tool-calling LLM with **DuckDB**, an ultra-fast in-memory analytical SQL engine. Rather than guessing the numbers, the agent translates natural language questions into deterministic ANSI SQL queries, runs them against the raw transactional dataset in memory (typically in under **15 milliseconds**), and synthesizes executive-ready insights.
+| Check | Result |
+| :--- | :--- |
+| `python test_agent.py` (offline) | Checks every core number against the validated case-study results, plus the security guardrails. |
+| `python eval_agent.py` (live, 14 questions with known answers) | `openai/gpt-oss-120b`: 14/14 in two runs · `qwen/qwen3.8-27b`: 14/14 (Groq, Nov 2026) |
 
-> 💡 **POC Note:** While this prototype operates over a localized two-year store dataset (21,931 records), it successfully proves the feasibility, speed, and 100% mathematical accuracy of agentic retail intelligence. When expanded to full enterprise scale, this architecture unlocks immense strategic and operational value across Canadian Tire's merchandising, supply chain, and store operations.
+The SQL results are deterministic. The written answer comes from an LLM and can vary between runs. An early version scored 12–13/14 because the model sometimes did arithmetic in its head; the prompt now requires every number to come from SQL. Re-run the eval before a demo, and keep the query drawer open so people can check.
 
----
+## Project layout
 
-## ⚡ Key Functionalities (What the POC Delivers Today)
+| File | What it holds |
+| :--- | :--- |
+| `app.py` | Streamlit UI: sidebar settings, KPI header, quick questions, chat and the query drawer. |
+| `agent_core.py` | Data loading, DuckDB views and lockdown, SQL guardrail, margin-bridge tool, system prompt, agent loop, quick answers. No Streamlit, so it can be tested. |
+| `test_agent.py` | Offline tests (no API key). |
+| `eval_agent.py` | Live accuracy check against a real model. |
+| `retail_data.csv` | The case-study data. |
 
-1. **Deterministic Math & Zero Hallucinations**:
-   - Every metric (Gross Sales, Net Margin, Margin Rate %, Unit Velocity) is calculated by DuckDB via ANSI SQL—never estimated by the LLM.
-   - Always respects retail accounting principles: calculates dollar totals before dividing margin rates (`SUM(Margin) / SUM(Sales)`).
+## Tables the agent can query
 
-2. **Autonomous Tool-Calling & Self-Correction**:
-   - The LLM receives database schema specifications and invokes the `execute_sql` tool.
-   - If an error occurs (syntax issue or missing column), the execution error is fed back to the model for **automatic self-correction** (up to 3 iterations) before answering.
-
-3. **Sub-Second In-Memory OLAP Performance**:
-   - DuckDB operates directly inside the application process with columnar vectorization, executing complex multi-year grouping and window functions in **5–20 ms**.
-
-4. **Full Analytical Transparency**:
-   - Every response includes an expandable audit drawer containing the exact generated SQL query, execution runtime, and interactive data table.
-   - Executives and analysts can verify the logic or download query results as CSV with one click.
-
-5. **Enterprise Credential Security (Zero Frontend Exposure)**:
-   - Sensitive API keys (`GROQ_API_KEY`, `OPENAI_API_KEY`) are resolved strictly on the backend via environment variables or Streamlit Secrets. No keys are ever exposed or requested in the frontend UI.
-
-6. **Executive Quick-Query Shortcuts**:
-   - One-click access to critical retail diagnostic queries:
-     - 🏆 *Margin Performance by Product Division (2024 vs 2023)*
-     - ⚠️ *5 Lowest Margin Rate Brands in 2024*
-     - 📉 *Cost vs. Price Squeeze Audit (Margin Dilution)*
-     - 🏬 *Store Size & Regional Profitability Matrix*
-
----
-
-## 🚀 The Enterprise Value Roadmap (When Fully Implemented)
-
-While this POC validates the core analytical engine, expanding it into a full-scale enterprise solution will drive transformative value across Canadian Tire:
-
-| Horizon | Capability | Business Impact |
+| Name | One row per | Highlights |
 | :--- | :--- | :--- |
-| **Phase 1 (Current POC)** | In-memory text-to-SQL exploration, automated executive summaries, and schema-constrained queries. | Demonstrates feasibility, eliminates hallucination, and establishes trust with non-technical stakeholders. |
-| **Phase 2 (Data Warehouse Integration)** | Connect DuckDB directly to **Snowflake, Databricks, or MotherDuck** via Iceberg/Parquet catalogs. | Expands query reach across billions of POS transactions, loyalty data (Triangle Rewards), and real-time inventory. |
-| **Phase 3 (Proactive Merchandising Agents)** | Autonomous background agent that monitors daily sales and supplier price lists. | Flags margin dilution in real-time, alerts buyers when supplier cost increases outpace retail prices, and recommends price adjustments. |
-| **Phase 4 (Scenario Modeling & What-If Simulations)** | Dynamic elasticity simulation (e.g., *"If we raise brand X prices by 3% in West Region, what is the margin impact?"*). | Replaces static PowerBI dashboards with actionable decision intelligence for Category Managers and VPs. |
-| **Phase 5 (Enterprise Workflow Integration)** | Microsoft Teams / Slack bot & ERP triggers (SAP, Blue Yonder). | Delivers daily store performance briefings directly into field operations and automated purchase order adjustments. |
+| `retail_sales` | store per day | Raw columns plus `SALES`, `COGS`, `MARGIN`, `STORE_FORMAT` |
+| `yearly_kpis` | year | sales, cogs, margin, margin rate, units |
+| `division_yoy`, `category_yoy`, `brand_yoy`, `region_yoy`, `store_yoy`, `product_yoy` | group | 2023 vs 2024 sales, margin, rate (bps), units; brands and products add price/cost % change; stores add $/sq ft |
+| `format_yoy` | store format | store count, sq ft, margin per store, $/sq ft |
 
----
+## Run it locally
 
-## 🛠️ Architecture & Technology Stack
-
-```
-   [ User Executive / Category Manager ]
-                     |
-           (Natural Language Query)
-                     v
-+-------------------------------------------------------------+
-|               Streamlit Executive UI (Port 8501)            |
-+-------------------------------------------------------------+
-                     |
-       (Prompt + In-Memory Schema Metadata)
-                     v
-+-------------------------------------------------------------+
-|    Agent Runner (Groq / OpenAI API via Tool-Calling)        |
-|    - Schema Guardrails                                      |
-|    - Mathematical Rules (Non-additive ratios)               |
-|    - Automated Error Self-Correction Loop                   |
-+-------------------------------------------------------------+
-                     |
-          (Generated ANSI SQL Query)
-                     v
-+-------------------------------------------------------------+
-|             DuckDB In-Memory OLAP Database                  |
-|    - Standardized View: 'retail_sales' (21,931 rows)        |
-|    - Columnar Storage & Vectorized Query Execution          |
-+-------------------------------------------------------------+
-                     |
-          (Verified Dataframe + Execution Runtime)
-                     v
-+-------------------------------------------------------------+
-|           LLM Synthesis & Executive Narrative               |
-|    - Bulleted Takeaways & Merchandising Insights            |
-|    - Downloadable CSV + Transparent SQL Drawer              |
-+-------------------------------------------------------------+
-```
-
----
-
-## 📦 Local Quickstart
-
-### 1. Clone & Navigate to Repository
-```bash
-git clone <your-repo-url>
-cd duckdb_retail_agent
-```
-
-### 2. Install Dependencies
 ```bash
 pip install -r requirements.txt
-```
-
-### 3. Configure API Credentials
-Create a `.env` file in the root directory:
-```env
-GROQ_API_KEY=your_groq_api_key_here
-# Or if using OpenAI:
-# OPENAI_API_KEY=your_openai_api_key_here
-```
-
-### 4. Run the Streamlit Application
-```bash
+cp .env.example .env        # then add your GROQ_API_KEY
 streamlit run app.py
 ```
-Open **`http://localhost:8501`** in your browser.
 
----
+Open http://localhost:8501.
 
-## ☁️ Deployment Guide (Streamlit Community Cloud)
+## Deploy on Streamlit Community Cloud
 
-1. **Push this repository to GitHub** (see instructions below).
-2. Go to **[share.streamlit.io](https://share.streamlit.io)** and click **"New app"**.
-3. Select your repository, branch (`main`), and set the main file path to **`app.py`**.
-4. Click **"Advanced settings..."** -> **"Secrets"** and enter your API key:
+1. Push this repository to GitHub.
+2. At [share.streamlit.io](https://share.streamlit.io), create an app from the repo with main file `app.py`.
+3. Under **Advanced settings → Secrets**, add:
    ```toml
-   GROQ_API_KEY = "gsk_your_groq_key_here"
+   GROQ_API_KEY = "gsk_..."
    ```
-5. Click **"Deploy!"** Your agent will be live with secure backend credentials.
+4. Deploy. Pushes to `main` redeploy automatically.
+
+## Where this could go next
+
+| Step | What it adds |
+| :--- | :--- |
+| Connect to the data warehouse | Point DuckDB at Snowflake / Databricks / Parquet so the same agent works on full POS, loyalty and inventory data. |
+| Margin alerts | Run the brand price-vs-cost check on a schedule and flag brands like Fynix (cost +10% vs price +6%) before the next buy. |
+| What-if questions | "If we raise Fynix prices 4%, what happens to margin?", using the same bridge logic. |
+| Teams / Slack | Ask questions where people already work. |

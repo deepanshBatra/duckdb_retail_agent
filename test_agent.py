@@ -1,139 +1,172 @@
 """
-Test script to verify DuckDB view creation and SQL queries for the 4 prompt questions.
-"""
-import duckdb
-import pandas as pd
+Offline tests for the retail agent (no API key needed).
 
-def run_tests():
-    # 1. Connect and initialize view
-    con = duckdb.connect(database=':memory:')
-    
-    # Load from retail_data.csv or Excel
-    df = pd.read_csv('duckdb_retail_agent/retail_data.csv')
-    con.register('raw_table', df)
-    
-    # Create standardized view with aliasing
-    con.execute("""
-    CREATE OR REPLACE VIEW retail_sales AS
-    SELECT 
-        YEAR,
-        QUARTER,
-        MONTH,
-        CAST(DATE AS DATE) AS DATE,
-        STORE_ID,
-        STORE_NAME,
-        STORE_SIZE,
-        CASE 
-            WHEN STORE_SIZE < 30000 THEN 'Small (<30k sqft)'
-            WHEN STORE_SIZE BETWEEN 30000 AND 80000 THEN 'Medium (30k-80k sqft)'
-            ELSE 'Large (>80k sqft)'
-        END AS STORE_SIZE_CATEGORY,
-        REGION,
-        PRODUCT_ID,
-        BRAND,
-        PRODUCT_CATEGORY,
-        PRODUCT_DIVISION,
-        PRODUCT_NAME,
-        SELLING_PRICE_PER_UNIT,
-        SELLING_PRICE_PER_UNIT AS SELLING_PRICE,
-        UNITS_SOLD,
-        COST_PER_UNIT,
-        COST_PER_UNIT AS COST
-    FROM raw_table;
-    """)
-    
-    print("Schema initialized successfully!")
-    
-    # Test Query 1: Which Product Divisions drove the highest margin in 2024 vs 2023?
-    q1 = """
-    SELECT 
-        PRODUCT_DIVISION,
-        ROUND(SUM(CASE WHEN YEAR = 2023 THEN UNITS_SOLD * SELLING_PRICE - UNITS_SOLD * COST ELSE 0 END), 2) AS Margin_2023,
-        ROUND(SUM(CASE WHEN YEAR = 2024 THEN UNITS_SOLD * SELLING_PRICE - UNITS_SOLD * COST ELSE 0 END), 2) AS Margin_2024,
-        ROUND(SUM(CASE WHEN YEAR = 2024 THEN UNITS_SOLD * SELLING_PRICE - UNITS_SOLD * COST ELSE 0 END) - 
-              SUM(CASE WHEN YEAR = 2023 THEN UNITS_SOLD * SELLING_PRICE - UNITS_SOLD * COST ELSE 0 END), 2) AS Margin_Diff,
-        ROUND((SUM(CASE WHEN YEAR = 2024 THEN UNITS_SOLD * SELLING_PRICE - UNITS_SOLD * COST ELSE 0 END) - 
-               SUM(CASE WHEN YEAR = 2023 THEN UNITS_SOLD * SELLING_PRICE - UNITS_SOLD * COST ELSE 0 END)) / 
-               NULLIF(SUM(CASE WHEN YEAR = 2023 THEN UNITS_SOLD * SELLING_PRICE - UNITS_SOLD * COST ELSE 0 END), 0) * 100, 2) AS Margin_Growth_Pct
-    FROM retail_sales
-    GROUP BY PRODUCT_DIVISION
-    ORDER BY Margin_2024 DESC;
-    """
-    res1 = con.execute(q1).df()
-    print("\n--- Question 1 Result ---")
-    print(res1)
-    
-    # Test Query 2: Which 5 brands had the lowest margin rates in 2024?
-    q2 = """
-    SELECT 
-        BRAND,
-        ROUND(SUM(UNITS_SOLD * SELLING_PRICE), 2) AS Total_Sales_2024,
-        ROUND(SUM(UNITS_SOLD * SELLING_PRICE - UNITS_SOLD * COST), 2) AS Total_Margin_2024,
-        ROUND((SUM(UNITS_SOLD * SELLING_PRICE - UNITS_SOLD * COST) / NULLIF(SUM(UNITS_SOLD * SELLING_PRICE), 0)) * 100, 2) AS Margin_Rate_Pct
-    FROM retail_sales
-    WHERE YEAR = 2024
-    GROUP BY BRAND
-    ORDER BY Margin_Rate_Pct ASC
-    LIMIT 5;
-    """
-    res2 = con.execute(q2).df()
-    print("\n--- Question 2 Result ---")
-    print(res2)
-    
-    # Test Query 3: List the products where unit cost increased faster than selling price in 2024 vs 2023
-    q3 = """
-    WITH yearly_pricing AS (
-        SELECT 
-            PRODUCT_ID,
-            PRODUCT_NAME,
-            PRODUCT_CATEGORY,
-            SUM(CASE WHEN YEAR = 2023 THEN UNITS_SOLD * SELLING_PRICE ELSE 0 END) / NULLIF(SUM(CASE WHEN YEAR = 2023 THEN UNITS_SOLD ELSE 0 END), 0) AS Avg_Price_2023,
-            SUM(CASE WHEN YEAR = 2024 THEN UNITS_SOLD * SELLING_PRICE ELSE 0 END) / NULLIF(SUM(CASE WHEN YEAR = 2024 THEN UNITS_SOLD ELSE 0 END), 0) AS Avg_Price_2024,
-            SUM(CASE WHEN YEAR = 2023 THEN UNITS_SOLD * COST ELSE 0 END) / NULLIF(SUM(CASE WHEN YEAR = 2023 THEN UNITS_SOLD ELSE 0 END), 0) AS Avg_Cost_2023,
-            SUM(CASE WHEN YEAR = 2024 THEN UNITS_SOLD * COST ELSE 0 END) / NULLIF(SUM(CASE WHEN YEAR = 2024 THEN UNITS_SOLD ELSE 0 END), 0) AS Avg_Cost_2024
-        FROM retail_sales
-        GROUP BY PRODUCT_ID, PRODUCT_NAME, PRODUCT_CATEGORY
-    ),
-    pct_changes AS (
-        SELECT 
-            PRODUCT_ID,
-            PRODUCT_NAME,
-            PRODUCT_CATEGORY,
-            ROUND(Avg_Price_2023, 2) AS Price_2023,
-            ROUND(Avg_Price_2024, 2) AS Price_2024,
-            ROUND(Avg_Cost_2023, 2) AS Cost_2023,
-            ROUND(Avg_Cost_2024, 2) AS Cost_2024,
-            ROUND((Avg_Price_2024 - Avg_Price_2023) / NULLIF(Avg_Price_2023, 0) * 100, 2) AS Price_Change_Pct,
-            ROUND((Avg_Cost_2024 - Avg_Cost_2023) / NULLIF(Avg_Cost_2023, 0) * 100, 2) AS Cost_Change_Pct
-        FROM yearly_pricing
-        WHERE Avg_Price_2023 IS NOT NULL AND Avg_Price_2024 IS NOT NULL
-    )
-    SELECT *
-    FROM pct_changes
-    WHERE Cost_Change_Pct > Price_Change_Pct
-    ORDER BY (Cost_Change_Pct - Price_Change_Pct) DESC
-    LIMIT 10;
-    """
-    res3 = con.execute(q3).df()
-    print("\n--- Question 3 Result (Top 10) ---")
-    print(res3)
-    
-    # Test Query 4: Break down total sales and margin rate by region and store size
-    q4 = """
-    SELECT 
-        REGION,
-        STORE_SIZE_CATEGORY,
-        COUNT(DISTINCT STORE_ID) AS Store_Count,
-        ROUND(SUM(UNITS_SOLD * SELLING_PRICE), 2) AS Total_Sales,
-        ROUND(SUM(UNITS_SOLD * SELLING_PRICE - UNITS_SOLD * COST), 2) AS Total_Margin,
-        ROUND((SUM(UNITS_SOLD * SELLING_PRICE - UNITS_SOLD * COST) / NULLIF(SUM(UNITS_SOLD * SELLING_PRICE), 0)) * 100, 2) AS Margin_Rate_Pct
-    FROM retail_sales
-    GROUP BY REGION, STORE_SIZE_CATEGORY
-    ORDER BY REGION, Total_Sales DESC;
-    """
-    res4 = con.execute(q4).df()
-    print("\n--- Question 4 Result ---")
-    print(res4)
+Run either way:
+    python test_agent.py
+    pytest test_agent.py
+The expected numbers are the validated figures from the case study results
+(and the Power BI dashboard).
+"""
+
+import os
+
+import agent_core as core
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _cursor():
+    with open(os.path.join(HERE, "retail_data.csv"), "rb") as f:
+        df = core.load_dataframe(f.read(), "retail_data.csv")
+    return core.build_database(df).cursor()
+
+
+CUR = _cursor()
+
+
+def close(a, b, tol=0.01):
+    return abs(float(a) - float(b)) <= tol
+
+
+# ---------------- Data + KPIs ----------------
+def test_profile():
+    p = core.profile_dataset(CUR)
+    assert p["rows"] == 7310
+    assert p["days"] == 731
+    assert len(p["stores"]) == 10
+    assert p["products"] == 165
+    assert p["one_row_per_store_day"] is True
+    assert p["one_price_per_product_year"] is True
+
+
+def test_yearly_kpis():
+    df = CUR.execute("SELECT * FROM yearly_kpis ORDER BY YEAR").df()
+    a, b = df.iloc[0], df.iloc[1]
+    assert close(a.sales, 1_023_950.39) and close(b.sales, 1_063_778.23)
+    assert close(a.cogs, 517_989.13) and close(b.cogs, 533_349.22)
+    assert close(a.margin, 505_961.26) and close(b.margin, 530_429.02)
+    assert close(a.margin_rate_pct, 49.41) and close(b.margin_rate_pct, 49.86)
+    assert int(a.units) == 10_868 and int(b.units) == 11_063
+
+
+def test_division_yoy():
+    df = CUR.execute("SELECT * FROM division_yoy").df().set_index("PRODUCT_DIVISION")
+    assert close(df.loc["Sports", "margin_change"], 26_577.25)
+    assert close(df.loc["Apparel", "margin_change"], -3_597.44)
+    assert close(df.loc["Apparel", "sales_2024"], 270_445.46)
+    assert close(df.loc["Sports", "margin_rate_2024"], 48.30)
+
+
+def test_brand_yoy_is_weighted():
+    df = CUR.execute("SELECT * FROM brand_yoy").df().set_index("BRAND")
+    assert close(df.loc["Fynix", "price_change_pct"], 6.0) and close(df.loc["Fynix", "cost_change_pct"], 10.0)
+    assert close(df.loc["Fynix", "margin_rate_change_bps"], -264.86)
+    # Weighted Quanta change is +24 bps (the old SKU-average figure was -98).
+    assert close(df.loc["Quanta", "margin_rate_change_bps"], 23.99)
+    assert close(df.loc["Vetra", "units_change_pct"], 6.19)
+
+
+def test_region_and_store_yoy():
+    r = CUR.execute("SELECT * FROM region_yoy").df().set_index("REGION")
+    assert int(r.loc["East", "store_count"]) == 4
+    assert close(r.loc["East", "margin_2024"], 211_624.51)
+    assert close(r.loc["West", "margin_change_pct"], 12.03)
+    s = CUR.execute("SELECT * FROM store_yoy").df().set_index("STORE_NAME")
+    assert close(s.loc["OBQH", "margin_change_pct"], -14.93)
+    assert s.loc["MTMA", "STORE_FORMAT"] == "Mid-Size"
+    assert s.loc["ABCX", "STORE_FORMAT"] == "Compact"
+    f = CUR.execute("SELECT * FROM format_yoy").df().set_index("STORE_FORMAT")
+    assert int(f.loc["Big-Box", "store_count"]) == 5
+    # Two-year Compact $/sqft is 4.66 in results.md, so one year must be roughly half.
+    assert close(f.loc["Compact", "margin_per_sqft_2023"] + f.loc["Compact", "margin_per_sqft_2024"], 4.66)
+
+
+# ---------------- Margin bridge ----------------
+def test_bridge_company():
+    b = core.margin_bridge(CUR, "company")
+    t = b["table"].iloc[0]
+    assert close(t.price_effect, 22_340.88)
+    assert close(t.cost_effect, -9_629.59)
+    assert close(t.volume_effect, 9_078.25)
+    assert close(t.mix_effect, 2_678.21)
+    assert close(t.margin_change, 24_467.76)
+    assert abs(t.check_difference) < 1e-6
+    rs = b["rate_split"]
+    assert close(rs["rate_change_bps"], 45.0, 0.1)
+    assert close(rs["from_mix_bps"], 29.9, 0.1)
+    assert close(rs["from_price_vs_cost_bps"], 15.1, 0.1)
+
+
+def test_bridge_division():
+    df = core.margin_bridge(CUR, "division")["table"].set_index("PRODUCT_DIVISION")
+    assert close(df.loc["Sports", "price_effect"], 7_847.82)
+    assert close(df.loc["Apparel", "cost_effect"], -552.13)
+    assert close(df.loc["TOTAL", "volume_effect"], 2_273.41)
+    assert (df.check_difference.abs() < 1e-6).all()
+
+
+# ---------------- Guardrails ----------------
+def test_blocks_file_reads():
+    r = core.run_query(CUR, "SELECT * FROM read_text('.env')")
+    assert not r["ok"]
+
+
+def test_blocks_multiple_statements():
+    r = core.run_query(CUR, "SELECT 1; CREATE TABLE pwned AS SELECT 1")
+    assert not r["ok"]
+    tables = [t[0] for t in CUR.execute("SELECT table_name FROM information_schema.tables").fetchall()]
+    assert "pwned" not in tables
+
+
+def test_blocks_writes_and_settings():
+    for q in ["DROP VIEW retail_sales", "CREATE TABLE x AS SELECT 1", "SET enable_external_access = true",
+              "ATTACH 'x.db'", "COPY retail_sales TO 'out.csv'", "INSTALL httpfs"]:
+        assert not core.run_query(CUR, q)["ok"], q
+
+
+def test_allows_normal_selects():
+    assert core.run_query(CUR, "SELECT COUNT(*) AS n FROM retail_sales -- comment")["ok"]
+    assert core.run_query(CUR, "WITH a AS (SELECT * FROM brand_yoy) SELECT BRAND FROM a;")["ok"]
+
+
+def test_syntax_error_is_returned_not_raised():
+    r = core.run_query(CUR, "SELEC * FROM retail_sales")
+    assert not r["ok"] and "error" in r
+
+
+def test_payload_truncation_flag():
+    df = CUR.execute("SELECT * FROM retail_sales").df()
+    p = core.df_to_payload(df)
+    assert p["truncated"] is True and p["rows_returned"] == core.MAX_ROWS_TO_MODEL and p["row_count"] == 7310
+
+
+# ---------------- Quick answers ----------------
+def test_quick_answers_use_live_numbers():
+    texts = {label: fn(CUR).text for label, _q, fn in core.QUICK_QUESTIONS}
+    joined = "\n".join(texts.values())
+    for s in ["$1,063,778.23", "+45 bps", "$26,577.25", "+$22,340.88", "-$9,629.59", "Fynix", "Quanta"]:
+        assert s in joined, s
+
+
+def test_clean_model_text():
+    assert core.clean_model_text("<think>secret</think>Answer") == "Answer"
+    assert core.clean_model_text("partial reasoning</think>\nAnswer") == "Answer"
+
+
+def test_system_prompt_has_real_stores():
+    prompt = core.build_system_prompt(core.profile_dataset(CUR))
+    assert "OBQH" in prompt and "731 days" in prompt and "ONE row per store per day" in prompt
+
 
 if __name__ == "__main__":
-    run_tests()
+    tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
+    failed = 0
+    for name, fn in tests:
+        try:
+            fn()
+            print(f"PASS  {name}")
+        except AssertionError as e:
+            failed += 1
+            print(f"FAIL  {name}: {e}")
+    print(f"\n{len(tests) - failed}/{len(tests)} passed")
+    raise SystemExit(1 if failed else 0)
